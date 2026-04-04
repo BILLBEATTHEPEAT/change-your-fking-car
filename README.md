@@ -2,6 +2,11 @@
 
 GT7 telemetry workstation with a live dashboard, lap analysis, and session storage.
 
+## Credits
+
+- Telemetry packet mapping and inspiration: https://github.com/hschaefer123/racecap?tab=readme-ov-file
+- Dashboard analysis references: https://github.com/snipem/gt7dashboard/blob/main/README.assets
+
 ## What it does
 
 - Collects Gran Turismo 7 telemetry over UDP
@@ -52,8 +57,3 @@ npm run tauri dev
 
 - `gt7-telemetry-app/` Tauri + React desktop app
 - `docs/` Design and planning notes
-
-## Credits
-
-- Telemetry packet mapping and inspiration: https://github.com/hschaefer123/racecap?tab=readme-ov-file
-- Dashboard analysis references: https://github.com/snipem/gt7dashboard/blob/main/README.assets

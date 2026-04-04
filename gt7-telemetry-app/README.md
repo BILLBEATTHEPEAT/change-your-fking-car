@@ -2,6 +2,11 @@
 
 Tauri + React desktop app for Gran Turismo 7 telemetry capture, live dashboard, and lap analysis.
 
+## Credits
+
+- Telemetry packet mapping and inspiration: https://github.com/hschaefer123/racecap?tab=readme-ov-file
+- Dashboard analysis references: https://github.com/snipem/gt7dashboard/blob/main/README.assets
+
 ## Requirements
 
 - Node.js 18+
@@ -31,8 +36,3 @@ npm run tauri dev
 
 - UDP ports 33739/33740 are used for telemetry
 - Database path is shown in the app under Database
-
-## Credits
-
-- Telemetry packet mapping and inspiration: https://github.com/hschaefer123/racecap?tab=readme-ov-file
-- Dashboard analysis references: https://github.com/snipem/gt7dashboard/blob/main/README.assets
