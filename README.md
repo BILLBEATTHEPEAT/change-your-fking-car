@@ -52,3 +52,8 @@ npm run tauri dev
 
 - `gt7-telemetry-app/` Tauri + React desktop app
 - `docs/` Design and planning notes
+
+## Credits
+
+- Telemetry packet mapping and inspiration: https://github.com/hschaefer123/racecap?tab=readme-ov-file
+- Dashboard analysis references: https://github.com/snipem/gt7dashboard/blob/main/README.assets

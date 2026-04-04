@@ -101,6 +101,18 @@ struct AppStatus {
     current_session_id: Option<i64>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DatabaseInfo {
+    path: String,
+    exists: bool,
+    size_bytes: Option<u64>,
+    sessions: Option<i64>,
+    laps: Option<i64>,
+    samples: Option<i64>,
+    last_sample_ts: Option<i64>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DbInitResult {
@@ -246,6 +258,160 @@ fn get_app_status(state: State<AppState>) -> AppStatus {
 fn get_live_payload(state: State<AppState>) -> Option<LivePayload> {
     let payload = *state.shared.last_live_payload.lock().unwrap();
     payload
+}
+
+#[tauri::command]
+fn get_database_info(state: State<AppState>) -> Result<DatabaseInfo, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    let path_str = db_path.to_string_lossy().to_string();
+    let exists = db_path.exists();
+    let size_bytes = if exists {
+        std::fs::metadata(&db_path).ok().map(|m| m.len())
+    } else {
+        None
+    };
+
+    if !exists {
+        return Ok(DatabaseInfo {
+            path: path_str,
+            exists,
+            size_bytes,
+            sessions: None,
+            laps: None,
+            samples: None,
+            last_sample_ts: None,
+        });
+    }
+
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+    let sessions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    let laps: i64 = conn
+        .query_row("SELECT COUNT(*) FROM laps", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    let samples: i64 = conn
+        .query_row("SELECT COUNT(*) FROM samples", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    let last_sample_ts: Option<i64> = conn
+        .query_row("SELECT MAX(ts_ms) FROM samples", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+
+    Ok(DatabaseInfo {
+        path: path_str,
+        exists,
+        size_bytes,
+        sessions: Some(sessions),
+        laps: Some(laps),
+        samples: Some(samples),
+        last_sample_ts,
+    })
+}
+
+#[tauri::command]
+fn vacuum_database(state: State<AppState>) -> Result<(), String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+    conn.execute_batch("VACUUM;")
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn reset_database(state: State<AppState>) -> Result<(), String> {
+    let running = *state.shared.listener_running.lock().unwrap();
+    if running {
+        return Err("Stop the listener before resetting the database".to_string());
+    }
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    if db_path.exists() {
+        std::fs::remove_file(&db_path).map_err(|err| err.to_string())?;
+    }
+    *state.shared.current_session_id.lock().unwrap() = None;
+    *state.shared.last_sample.lock().unwrap() = None;
+    *state.shared.last_live_payload.lock().unwrap() = None;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_lap(state: State<AppState>, lap_id: i64) -> Result<(), String> {
+    let running = *state.shared.listener_running.lock().unwrap();
+    if running {
+        return Err("Stop the listener before deleting data".to_string());
+    }
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let mut conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+    let tx = conn.transaction().map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM samples WHERE lap_id = ?1", params![lap_id])
+        .map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM laps WHERE id = ?1", params![lap_id])
+        .map_err(|err| err.to_string())?;
+    tx.commit().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_session(state: State<AppState>, session_id: i64) -> Result<(), String> {
+    let running = *state.shared.listener_running.lock().unwrap();
+    if running {
+        return Err("Stop the listener before deleting data".to_string());
+    }
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let mut conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+    let tx = conn.transaction().map_err(|err| err.to_string())?;
+    tx.execute(
+        "DELETE FROM samples WHERE lap_id IN (SELECT id FROM laps WHERE session_id = ?1)",
+        params![session_id],
+    )
+    .map_err(|err| err.to_string())?;
+    tx.execute(
+        "DELETE FROM laps WHERE session_id = ?1",
+        params![session_id],
+    )
+    .map_err(|err| err.to_string())?;
+    tx.execute(
+        "DELETE FROM session_preferences WHERE session_id = ?1",
+        params![session_id],
+    )
+    .map_err(|err| err.to_string())?;
+    tx.execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
+        .map_err(|err| err.to_string())?;
+    tx.commit().map_err(|err| err.to_string())?;
+
+    let mut current = state.shared.current_session_id.lock().unwrap();
+    if *current == Some(session_id) {
+        *current = None;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2013,6 +2179,11 @@ pub fn run() {
             ping,
             get_app_status,
             get_live_payload,
+            get_database_info,
+            vacuum_database,
+            reset_database,
+            delete_lap,
+            delete_session,
             start_listener,
             stop_listener,
             init_database,

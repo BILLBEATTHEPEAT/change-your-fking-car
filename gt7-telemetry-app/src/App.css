@@ -291,6 +291,40 @@
   font-size: 13px;
 }
 
+.db-panel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 118, 110, 0.2);
+  background: rgba(15, 118, 110, 0.06);
+  font-size: 14px;
+}
+
+.db-panel div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.db-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.db-row {
+  display: grid;
+  gap: 8px;
+}
+
+.db-select {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .flag-row {
   display: flex;
   gap: 8px;

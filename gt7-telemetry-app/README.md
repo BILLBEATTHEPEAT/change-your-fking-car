@@ -1,16 +1,38 @@
-# React + Vite
+# GT7 Telemetry App
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Tauri + React desktop app for Gran Turismo 7 telemetry capture, live dashboard, and lap analysis.
 
-Currently, two official plugins are available:
+## Requirements
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Node.js 18+
+- Rust toolchain (stable)
+- Tauri prerequisites for your OS
 
-## React Compiler
+## Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+npm install
+```
 
-## Expanding the ESLint configuration
+## Run (dev)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm run tauri dev
+```
+
+## Use
+
+1) Enter your PS5 IP address
+2) Start the listener
+3) Initialize the database
+4) Drive in GT7 to see live metrics and record laps
+
+## Notes
+
+- UDP ports 33739/33740 are used for telemetry
+- Database path is shown in the app under Database
+
+## Credits
+
+- Telemetry packet mapping and inspiration: https://github.com/hschaefer123/racecap?tab=readme-ov-file
+- Dashboard analysis references: https://github.com/snipem/gt7dashboard/blob/main/README.assets

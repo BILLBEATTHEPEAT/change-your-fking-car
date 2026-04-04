@@ -25,6 +25,7 @@ function App() {
   const [laps, setLaps] = useState([])
   const [referenceLapId, setReferenceLapId] = useState('')
   const [compareLapId, setCompareLapId] = useState('')
+  const [deleteLapId, setDeleteLapId] = useState('')
   const [referenceSamples, setReferenceSamples] = useState([])
   const [compareSamples, setCompareSamples] = useState([])
   const [trackPoints, setTrackPoints] = useState([])
@@ -41,6 +42,7 @@ function App() {
   const [importPreview, setImportPreview] = useState(null)
   const [importFile, setImportFile] = useState(null)
   const [sessions, setSessions] = useState([])
+  const [dbInfo, setDbInfo] = useState(null)
 
   const lastPacketLabel = useMemo(() => {
     if (!status.lastPacketAt) return 'No packets yet'
@@ -224,6 +226,15 @@ function App() {
     }
   }, [])
 
+  const loadDatabaseInfo = useCallback(async () => {
+    try {
+      const info = await invoke('get_database_info')
+      setDbInfo(info)
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to load database info')
+    }
+  }, [])
+
   const loadLaps = useCallback(async () => {
     try {
       const data = await invoke('list_laps', {
@@ -319,12 +330,83 @@ function App() {
       await refreshStatus()
       await loadLaps()
       await loadSessions()
+      await loadDatabaseInfo()
     } catch (err) {
       setError(err?.toString?.() ?? 'Failed to initialize database')
     } finally {
       setLoading(false)
     }
-  }, [refreshStatus, loadLaps, loadSessions])
+  }, [refreshStatus, loadLaps, loadSessions, loadDatabaseInfo])
+
+  const vacuumDatabase = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      await invoke('vacuum_database')
+      await loadDatabaseInfo()
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to vacuum database')
+    } finally {
+      setLoading(false)
+    }
+  }, [loadDatabaseInfo])
+
+  const resetDatabase = useCallback(async () => {
+    if (!window.confirm('Delete the local database file? This cannot be undone.')) return
+    setLoading(true)
+    setError('')
+    try {
+      await invoke('reset_database')
+      await refreshStatus()
+      await loadSessions()
+      await loadLaps()
+      await loadDatabaseInfo()
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to reset database')
+    } finally {
+      setLoading(false)
+    }
+  }, [refreshStatus, loadSessions, loadLaps, loadDatabaseInfo])
+
+  const deleteSession = useCallback(async () => {
+    if (!currentSessionId) return
+    if (!window.confirm(`Delete session ${currentSessionId}? This cannot be undone.`)) return
+    setLoading(true)
+    setError('')
+    try {
+      await invoke('delete_session', { sessionId: Number(currentSessionId) })
+      setCurrentSessionId(null)
+      setReferenceLapId('')
+      setCompareLapId('')
+      await loadSessions()
+      await loadLaps()
+      await loadDatabaseInfo()
+      await refreshStatus()
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to delete session')
+    } finally {
+      setLoading(false)
+    }
+  }, [currentSessionId, loadSessions, loadLaps, loadDatabaseInfo, refreshStatus])
+
+  const deleteLap = useCallback(async () => {
+    if (!deleteLapId) return
+    if (!window.confirm(`Delete lap ${deleteLapId}? This cannot be undone.`)) return
+    setLoading(true)
+    setError('')
+    try {
+      await invoke('delete_lap', { lapId: Number(deleteLapId) })
+      if (referenceLapId === deleteLapId) setReferenceLapId('')
+      if (compareLapId === deleteLapId) setCompareLapId('')
+      setDeleteLapId('')
+      await loadLaps()
+      await loadDatabaseInfo()
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to delete lap')
+    } finally {
+      setLoading(false)
+    }
+  }, [deleteLapId, referenceLapId, compareLapId, loadLaps, loadDatabaseInfo])
 
   const selectSession = useCallback(
     async (sessionId) => {
@@ -359,6 +441,10 @@ function App() {
   }, [refreshStatus])
 
   useEffect(() => {
+    loadDatabaseInfo()
+  }, [loadDatabaseInfo])
+
+  useEffect(() => {
     if (!status.listenerRunning) return undefined
     const interval = setInterval(() => {
       loadLivePayload()
@@ -371,10 +457,11 @@ function App() {
     const interval = setInterval(() => {
       loadLaps()
       loadSessions()
+      loadDatabaseInfo()
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [loadLaps, loadSessions])
+  }, [loadLaps, loadSessions, loadDatabaseInfo])
 
   useEffect(() => {
     if (!currentSessionId) return
@@ -770,12 +857,13 @@ function App() {
       await loadSessions()
       await loadLaps()
       await loadSessionPreferences()
+      await loadDatabaseInfo()
     } catch (err) {
       setError(err?.toString?.() ?? 'Failed to import session')
     } finally {
       setLoading(false)
     }
-  }, [importFile, refreshStatus, loadSessions, loadLaps, loadSessionPreferences])
+  }, [importFile, refreshStatus, loadSessions, loadLaps, loadSessionPreferences, loadDatabaseInfo])
 
   const trackOption = useMemo(() => {
     const refSeries = buildDistanceSeries(referenceSamples)
@@ -962,6 +1050,17 @@ function App() {
     ? `${livePayload.lapCount} / ${livePayload.lapsInRace}`
     : '—'
   const liveFuelPct = livePayload ? Math.round(livePayload.fuelPct) : 0
+  const dbSizeLabel = useMemo(() => {
+    if (!dbInfo?.sizeBytes) return '—'
+    const sizes = ['B', 'KB', 'MB', 'GB']
+    let size = dbInfo.sizeBytes
+    let unit = 0
+    while (size >= 1024 && unit < sizes.length - 1) {
+      size /= 1024
+      unit += 1
+    }
+    return `${size.toFixed(unit === 0 ? 0 : 1)} ${sizes[unit]}`
+  }, [dbInfo])
 
   return (
     <div className="app">
@@ -1441,6 +1540,89 @@ function App() {
           </p>
           <div className="chart-card" aria-hidden="true">
             <div className="placeholder">Fuel analysis will appear here.</div>
+          </div>
+        </article>
+        <article>
+          <h2>Database Management</h2>
+          <p>Check storage health, clean up, or reset telemetry data.</p>
+          <div className="db-panel">
+            <div>
+              <span className="label">Path</span>
+              <span className="value">{dbInfo?.path ?? status.dbPath ?? '—'}</span>
+            </div>
+            <div>
+              <span className="label">Size</span>
+              <span className="value">{dbSizeLabel}</span>
+            </div>
+            <div>
+              <span className="label">Sessions</span>
+              <span className="value">{dbInfo?.sessions ?? '—'}</span>
+            </div>
+            <div>
+              <span className="label">Laps</span>
+              <span className="value">{dbInfo?.laps ?? '—'}</span>
+            </div>
+            <div>
+              <span className="label">Samples</span>
+              <span className="value">{dbInfo?.samples ?? '—'}</span>
+            </div>
+            <div>
+              <span className="label">Last Sample</span>
+              <span className="value">
+                {dbInfo?.lastSampleTs ? new Date(dbInfo.lastSampleTs).toLocaleString() : '—'}
+              </span>
+            </div>
+          </div>
+          <div className="actions">
+            <button type="button" onClick={initDatabase} disabled={loading}>
+              Initialize DB
+            </button>
+            <button type="button" className="ghost" onClick={vacuumDatabase} disabled={loading}>
+              Vacuum DB
+            </button>
+            <button type="button" className="ghost" onClick={resetDatabase} disabled={loading}>
+              Reset DB
+            </button>
+          </div>
+          <div className="db-actions">
+            <div className="db-row">
+              <span className="label">Delete Session</span>
+              <button
+                type="button"
+                className="ghost"
+                onClick={deleteSession}
+                disabled={loading || !currentSessionId}
+              >
+                Delete Current Session
+              </button>
+            </div>
+            <div className="db-row">
+              <label className="label" htmlFor="delete-lap">
+                Delete Lap
+              </label>
+              <div className="db-select">
+                <select
+                  id="delete-lap"
+                  value={deleteLapId}
+                  onChange={(event) => setDeleteLapId(event.target.value)}
+                >
+                  <option value="">Select a lap</option>
+                  {laps.map((lap) => (
+                    <option key={lap.id} value={String(lap.id)}>
+                      Lap {lap.lapIndex} · {formatLapTime(lap.lapTimeMs)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={deleteLap}
+                  disabled={loading || !deleteLapId}
+                >
+                  Delete Lap
+                </button>
+              </div>
+            </div>
           </div>
         </article>
       </section>
