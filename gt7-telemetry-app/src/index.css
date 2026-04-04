@@ -1,0 +1,76 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap');
+
+:root {
+  --bg: #f6f1ea;
+  --panel-bg: #fff8f0;
+  --border: #e4d8c7;
+  --text: #3f3b35;
+  --text-strong: #1f1b16;
+  --muted: #7a6f62;
+  --accent: #0f766e;
+  --accent-strong: #0b5f58;
+  --warning: #b45309;
+  --danger: #b91c1c;
+  --shadow: 0 16px 40px rgba(47, 33, 16, 0.12);
+
+  --sans: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  --heading: 'Space Grotesk', 'IBM Plex Sans', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  font: 16px/1.6 var(--sans);
+  letter-spacing: 0.01em;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 15% 15%, rgba(15, 118, 110, 0.12), transparent 45%),
+    radial-gradient(circle at 85% 10%, rgba(180, 83, 9, 0.12), transparent 45%),
+    linear-gradient(180deg, #f8f3ec 0%, #efe6db 100%);
+  min-height: 100svh;
+  overflow-y: auto;
+}
+
+#root {
+  max-width: 1200px;
+  margin: 0 auto;
+  min-height: 100svh;
+}
+
+h1,
+h2 {
+  font-family: var(--heading);
+  color: var(--text-strong);
+  margin: 0 0 12px;
+}
+
+h1 {
+  font-size: clamp(32px, 4vw, 56px);
+  line-height: 1.1;
+}
+
+h2 {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+p {
+  margin: 0;
+}
+
+code {
+  font-family: var(--mono);
+  background: rgba(15, 118, 110, 0.12);
+  padding: 2px 6px;
+  border-radius: 6px;
+}
