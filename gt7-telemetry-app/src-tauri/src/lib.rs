@@ -19,6 +19,7 @@ struct SharedState {
     last_listener_error: Mutex<Option<String>>,
     bound_ports: Mutex<Vec<u16>>,
     current_session_id: Mutex<Option<i64>>,
+    last_completed_lap_id: Mutex<Option<i64>>,
 }
 
 struct AppState {
@@ -139,6 +140,77 @@ struct LapSummary {
     lap_time_ms: Option<i64>,
     is_valid: bool,
     is_replay: bool,
+    is_last_lap: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DetailedLap {
+    id: i64,
+    lap_index: i32,
+    lap_time_ms: Option<i64>,
+    delta_to_best_ms: Option<i64>,
+    is_valid: bool,
+    is_replay: bool,
+    is_last_lap: bool,
+    max_speed_kmh: f64,
+    avg_speed_kmh: f64,
+    throttle_pct: f64,
+    brake_pct: f64,
+    fuel_start: f64,
+    fuel_end: f64,
+    fuel_consumed: f64,
+    min_body_height: f64,
+    max_rpm: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LapMetrics {
+    lap_id: i64,
+    max_speed_kmh: f64,
+    min_body_height: f64,
+    fuel_consumed: f64,
+    avg_throttle: f64,
+    avg_brake: f64,
+    top_gear_reached: bool,
+    max_rpm: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VariancePoint {
+    distance: f64,
+    mean: f64,
+    stddev: f64,
+    min: f64,
+    max: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VarianceSeries {
+    points: Vec<VariancePoint>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FuelAnalysis {
+    laps: Vec<FuelLap>,
+    avg_consumption_per_lap: f64,
+    projected_laps_remaining: f64,
+    fuel_capacity: f64,
+    current_fuel: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FuelLap {
+    lap_id: i64,
+    lap_index: i32,
+    fuel_start: f64,
+    fuel_end: f64,
+    consumed: f64,
 }
 
 #[derive(Serialize)]
@@ -594,6 +666,8 @@ fn start_listener(state: State<AppState>) -> AppStatus {
                                                     prev_lap_id,
                                                     sample.last_lap_time_ms as i64,
                                                 );
+                                                // Track the last completed lap
+                                                *shared.last_completed_lap_id.lock().unwrap() = Some(prev_lap_id);
                                             }
                                         }
 
@@ -770,6 +844,9 @@ fn list_laps(state: State<AppState>, session_id: Option<i64>) -> Result<Vec<LapS
         .ok_or_else(|| "Database path not initialized".to_string())?;
     init_database_at_path(&db_path).map_err(|err| err.to_string())?;
     let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    let last_lap_id = *state.shared.last_completed_lap_id.lock().unwrap();
+
     let mut stmt = conn
         .prepare(
             "
@@ -783,12 +860,524 @@ fn list_laps(state: State<AppState>, session_id: Option<i64>) -> Result<Vec<LapS
 
     let rows = stmt
         .query_map([session_id], |row| {
+            let lap_id: i64 = row.get(0)?;
             Ok(LapSummary {
-                id: row.get(0)?,
+                id: lap_id,
                 lap_index: row.get::<_, i64>(1)? as i32,
                 lap_time_ms: row.get(2)?,
                 is_valid: row.get::<_, i64>(3)? != 0,
                 is_replay: row.get::<_, i64>(4)? != 0,
+                is_last_lap: Some(lap_id) == last_lap_id,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut laps = Vec::new();
+    for item in rows {
+        laps.push(item.map_err(|err| err.to_string())?);
+    }
+    Ok(laps)
+}
+
+#[tauri::command]
+fn get_last_lap_id(state: State<AppState>) -> Option<i64> {
+    *state.shared.last_completed_lap_id.lock().unwrap()
+}
+
+#[tauri::command]
+fn list_laps_detailed(state: State<AppState>, session_id: i64) -> Result<Vec<DetailedLap>, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    let last_lap_id = *state.shared.last_completed_lap_id.lock().unwrap();
+
+    // First, get the best lap time for delta calculation
+    let best_lap_ms: Option<i64> = conn
+        .query_row(
+            "SELECT MIN(lap_time_ms) FROM laps WHERE session_id = ?1 AND lap_time_ms IS NOT NULL",
+            [session_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
+
+    let mut stmt = conn
+        .prepare(
+            "
+        SELECT
+            l.id,
+            l.lap_index,
+            l.lap_time_ms,
+            l.is_valid,
+            l.is_replay,
+            COALESCE(MAX(s.speed_kmh), 0) as max_speed,
+            COALESCE(AVG(s.speed_kmh), 0) as avg_speed,
+            COALESCE(AVG(s.throttle), 0) as avg_throttle,
+            COALESCE(AVG(s.brake), 0) as avg_brake,
+            COALESCE(MIN(s.fuel), 0) as fuel_end,
+            COALESCE(MAX(s.fuel), 0) as fuel_start,
+            COALESCE(MIN(s.body_height), 0) as min_body_height,
+            COALESCE(MAX(s.rpm), 0) as max_rpm
+        FROM laps l
+        LEFT JOIN samples s ON s.lap_id = l.id
+        WHERE l.session_id = ?1
+        GROUP BY l.id
+        ORDER BY l.lap_index ASC
+        ",
+        )
+        .map_err(|err| err.to_string())?;
+
+    let rows = stmt
+        .query_map([session_id], |row| {
+            let lap_id: i64 = row.get(0)?;
+            let lap_time_ms: Option<i64> = row.get(2)?;
+            let delta_to_best_ms = match (lap_time_ms, best_lap_ms) {
+                (Some(lap), Some(best)) => Some(lap - best),
+                _ => None,
+            };
+            let fuel_start: f64 = row.get(10)?;
+            let fuel_end: f64 = row.get(9)?;
+            let fuel_consumed = fuel_start - fuel_end;
+
+            Ok(DetailedLap {
+                id: lap_id,
+                lap_index: row.get(1)?,
+                lap_time_ms,
+                delta_to_best_ms,
+                is_valid: row.get::<_, i64>(3)? != 0,
+                is_replay: row.get::<_, i64>(4)? != 0,
+                is_last_lap: Some(lap_id) == last_lap_id,
+                max_speed_kmh: row.get::<_, f64>(5)?,
+                avg_speed_kmh: row.get::<_, f64>(6)?,
+                throttle_pct: row.get::<_, f64>(7)?,
+                brake_pct: row.get::<_, f64>(8)?,
+                fuel_start,
+                fuel_end,
+                fuel_consumed,
+                min_body_height: row.get::<_, f64>(11)?,
+                max_rpm: row.get::<_, f64>(12)?,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut laps = Vec::new();
+    for item in rows {
+        laps.push(item.map_err(|err| err.to_string())?);
+    }
+    Ok(laps)
+}
+
+#[tauri::command]
+fn get_lap_metrics(state: State<AppState>, lap_id: i64) -> Result<LapMetrics, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    let row: Option<(f64, f64, f64, f64, f64, f64, f64)> = conn
+        .query_row(
+            "
+        SELECT
+            MAX(speed_kmh),
+            MIN(body_height),
+            AVG(throttle),
+            AVG(brake),
+            MAX(rpm),
+            (SELECT fuel FROM samples WHERE lap_id = ?1 ORDER BY id ASC LIMIT 1),
+            (SELECT fuel FROM samples WHERE lap_id = ?1 ORDER BY id DESC LIMIT 1)
+        FROM samples
+        WHERE lap_id = ?1
+        ",
+            [lap_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .ok();
+
+    let (max_speed, min_body_height, avg_throttle, avg_brake, max_rpm, fuel_start, fuel_end) =
+        row.unwrap_or((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0));
+
+    let fuel_consumed = fuel_start - fuel_end;
+    let top_gear_reached = max_rpm > 8000.0; // Generic threshold, could be car-specific
+
+    Ok(LapMetrics {
+        lap_id,
+        max_speed_kmh: max_speed,
+        min_body_height,
+        fuel_consumed,
+        avg_throttle,
+        avg_brake,
+        top_gear_reached,
+        max_rpm,
+    })
+}
+
+#[tauri::command]
+fn get_speed_variance(
+    state: State<AppState>,
+    lap_ids: Vec<i64>,
+    points: u32,
+) -> Result<VarianceSeries, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    if lap_ids.is_empty() {
+        return Ok(VarianceSeries { points: vec![] });
+    }
+
+    // Fetch all samples for all laps
+    let mut all_laps: Vec<Vec<(f64, f64)>> = Vec::new(); // (distance, speed)
+
+    for lap_id in &lap_ids {
+        let mut stmt = conn
+            .prepare(
+                "SELECT dist_m, speed_kmh FROM samples WHERE lap_id = ?1 ORDER BY id ASC",
+            )
+            .map_err(|err| err.to_string())?;
+
+        let samples: Vec<(f64, f64)> = stmt
+            .query_map([lap_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|err| err.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if !samples.is_empty() {
+            all_laps.push(samples);
+        }
+    }
+
+    if all_laps.is_empty() {
+        return Ok(VarianceSeries { points: vec![] });
+    }
+
+    // Find total distance (use max from all laps)
+    let max_dist = all_laps
+        .iter()
+        .filter_map(|lap| lap.last().map(|(d, _)| *d))
+        .fold(0.0f64, |a, b| a.max(b));
+
+    if max_dist <= 0.0 {
+        return Ok(VarianceSeries { points: vec![] });
+    }
+
+    // Resample each lap to the same number of points and calculate variance
+    let mut result_points = Vec::new();
+    let step = max_dist / (points - 1) as f64;
+
+    for i in 0..points as usize {
+        let target_dist = step * i as f64;
+
+        let mut speeds_at_point = Vec::new();
+        for lap in &all_laps {
+            if lap.len() < 2 {
+                continue;
+            }
+            // Linear interpolation
+            let mut prev = lap[0];
+            for sample in lap.iter().skip(1) {
+                if sample.0 >= target_dist {
+                    let t = if sample.0 - prev.0 > 0.0 {
+                        (target_dist - prev.0) / (sample.0 - prev.0)
+                    } else {
+                        0.0
+                    };
+                    let speed = prev.1 + (sample.1 - prev.1) * t;
+                    speeds_at_point.push(speed);
+                    break;
+                }
+                prev = *sample;
+            }
+            if speeds_at_point.is_empty() && lap.len() > 0 {
+                speeds_at_point.push(lap.last().unwrap().1);
+            }
+        }
+
+        if speeds_at_point.len() >= 2 {
+            let mean = speeds_at_point.iter().sum::<f64>() / speeds_at_point.len() as f64;
+            let variance: f64 = speeds_at_point
+                .iter()
+                .map(|s| (s - mean).powi(2))
+                .sum::<f64>()
+                / speeds_at_point.len() as f64;
+            let stddev = variance.sqrt();
+            let min = speeds_at_point.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = speeds_at_point.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+            result_points.push(VariancePoint {
+                distance: target_dist,
+                mean,
+                stddev,
+                min,
+                max,
+            });
+        }
+    }
+
+    Ok(VarianceSeries {
+        points: result_points,
+    })
+}
+
+#[tauri::command]
+fn get_session_fuel_analysis(
+    state: State<AppState>,
+    session_id: i64,
+) -> Result<FuelAnalysis, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    let mut laps_data = Vec::new();
+
+    let mut stmt = conn
+        .prepare(
+            "
+        SELECT
+            l.id,
+            l.lap_index,
+            (SELECT fuel FROM samples WHERE lap_id = l.id ORDER BY id ASC LIMIT 1) as fuel_start,
+            (SELECT fuel FROM samples WHERE lap_id = l.id ORDER BY id DESC LIMIT 1) as fuel_end
+        FROM laps l
+        WHERE l.session_id = ?1
+        ORDER BY l.lap_index ASC
+        ",
+        )
+        .map_err(|err| err.to_string())?;
+
+    let rows = stmt
+        .query_map([session_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i32>(1)?,
+                row.get::<_, f64>(2).unwrap_or(0.0),
+                row.get::<_, f64>(3).unwrap_or(0.0),
+            ))
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut total_consumed = 0.0;
+    for row in rows {
+        let (lap_id, lap_index, fuel_start, fuel_end) = row.map_err(|err| err.to_string())?;
+        let consumed = fuel_start - fuel_end;
+        total_consumed += consumed;
+        laps_data.push(FuelLap {
+            lap_id,
+            lap_index,
+            fuel_start,
+            fuel_end,
+            consumed,
+        });
+    }
+
+    let avg_consumption = if !laps_data.is_empty() {
+        total_consumed / laps_data.len() as f64
+    } else {
+        0.0
+    };
+
+    // Get current fuel from last sample
+    let current_fuel: Option<f64> = conn
+        .query_row(
+            "SELECT fuel FROM samples WHERE lap_id IN (SELECT id FROM laps WHERE session_id = ?1) ORDER BY id DESC LIMIT 1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .ok();
+
+    let fuel_capacity: Option<f64> = conn
+        .query_row(
+            "SELECT fuel_capacity FROM samples WHERE lap_id IN (SELECT id FROM laps WHERE session_id = ?1) ORDER BY id DESC LIMIT 1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .ok();
+
+    let projected_laps = if avg_consumption > 0.0 && current_fuel.is_some() {
+        current_fuel.unwrap() / avg_consumption
+    } else {
+        0.0
+    };
+
+    Ok(FuelAnalysis {
+        laps: laps_data,
+        avg_consumption_per_lap: avg_consumption,
+        projected_laps_remaining: projected_laps,
+        fuel_capacity: fuel_capacity.unwrap_or(0.0),
+        current_fuel: current_fuel.unwrap_or(0.0),
+    })
+}
+
+#[tauri::command]
+fn get_median_lap(
+    state: State<AppState>,
+    session_id: i64,
+) -> Result<Option<LapSummary>, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    let last_lap_id = *state.shared.last_completed_lap_id.lock().unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "
+        SELECT id, lap_index, lap_time_ms, is_valid, is_replay
+        FROM laps
+        WHERE session_id = ?1 AND lap_time_ms IS NOT NULL
+        ORDER BY lap_time_ms ASC
+        ",
+        )
+        .map_err(|err| err.to_string())?;
+
+    let laps: Vec<(i64, i32, i64, bool, bool)> = stmt
+        .query_map([session_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i64>(3)? != 0,
+                row.get::<_, i64>(4)? != 0,
+            ))
+        })
+        .map_err(|err| err.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if laps.is_empty() {
+        return Ok(None);
+    }
+
+    let median_idx = laps.len() / 2;
+    let median_lap = &laps[median_idx];
+
+    Ok(Some(LapSummary {
+        id: median_lap.0,
+        lap_index: median_lap.1,
+        lap_time_ms: Some(median_lap.2),
+        is_valid: median_lap.3,
+        is_replay: median_lap.4,
+        is_last_lap: Some(median_lap.0) == last_lap_id,
+    }))
+}
+
+#[tauri::command]
+fn get_best_laps(
+    state: State<AppState>,
+    session_id: i64,
+    count: u32,
+) -> Result<Vec<LapSummary>, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    let last_lap_id = *state.shared.last_completed_lap_id.lock().unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "
+        SELECT id, lap_index, lap_time_ms, is_valid, is_replay
+        FROM laps
+        WHERE session_id = ?1 AND lap_time_ms IS NOT NULL
+        ORDER BY lap_time_ms ASC
+        LIMIT ?2
+        ",
+        )
+        .map_err(|err| err.to_string())?;
+
+    let rows = stmt
+        .query_map(params![session_id, count as i64], |row| {
+            let lap_id: i64 = row.get(0)?;
+            Ok(LapSummary {
+                id: lap_id,
+                lap_index: row.get::<_, i64>(1)? as i32,
+                lap_time_ms: row.get(2)?,
+                is_valid: row.get::<_, i64>(3)? != 0,
+                is_replay: row.get::<_, i64>(4)? != 0,
+                is_last_lap: Some(lap_id) == last_lap_id,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut laps = Vec::new();
+    for item in rows {
+        laps.push(item.map_err(|err| err.to_string())?);
+    }
+    Ok(laps)
+}
+
+#[tauri::command]
+fn list_replay_laps(state: State<AppState>, session_id: i64) -> Result<Vec<LapSummary>, String> {
+    let db_path = state
+        .db_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "Database path not initialized".to_string())?;
+    init_database_at_path(&db_path).map_err(|err| err.to_string())?;
+    let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+
+    let last_lap_id = *state.shared.last_completed_lap_id.lock().unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "
+        SELECT id, lap_index, lap_time_ms, is_valid, is_replay
+        FROM laps
+        WHERE session_id = ?1 AND is_replay = 1
+        ORDER BY lap_index ASC
+        ",
+        )
+        .map_err(|err| err.to_string())?;
+
+    let rows = stmt
+        .query_map([session_id], |row| {
+            let lap_id: i64 = row.get(0)?;
+            Ok(LapSummary {
+                id: lap_id,
+                lap_index: row.get::<_, i64>(1)? as i32,
+                lap_time_ms: row.get(2)?,
+                is_valid: row.get::<_, i64>(3)? != 0,
+                is_replay: true,
+                is_last_lap: Some(lap_id) == last_lap_id,
             })
         })
         .map_err(|err| err.to_string())?;
@@ -2190,6 +2779,14 @@ pub fn run() {
             set_target_ip,
             get_recent_samples,
             list_laps,
+            list_laps_detailed,
+            get_last_lap_id,
+            get_lap_metrics,
+            get_speed_variance,
+            get_session_fuel_analysis,
+            get_median_lap,
+            get_best_laps,
+            list_replay_laps,
             list_sessions,
             set_current_session,
             get_lap_samples,

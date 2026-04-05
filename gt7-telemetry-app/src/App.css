@@ -459,3 +459,172 @@ button.ghost {
 .grid h2 {
   margin-bottom: 8px;
 }
+
+/* Quick select buttons */
+.quick-selects {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.quick-selects button {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+/* Control group */
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.control-group select {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 14px;
+  min-width: 120px;
+}
+
+/* Fuel panel */
+.fuel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fuel-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.fuel-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fuel-summary .label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fuel-summary .value {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.fuel-table-wrapper {
+  overflow-x: auto;
+}
+
+.fuel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.fuel-table th,
+.fuel-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.fuel-table th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fuel-table tbody tr:hover {
+  background: var(--bg-offset);
+}
+
+/* Lap table */
+.lap-table-wrapper {
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.lap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.lap-table th,
+.lap-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.lap-table th {
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  position: sticky;
+  top: 0;
+  background: var(--panel-bg);
+  z-index: 1;
+}
+
+.lap-table tbody tr:hover {
+  background: var(--bg-offset);
+}
+
+.lap-table tbody tr.is-last {
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.lap-table .last-badge,
+.lap-table .replay-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  font-weight: 600;
+}
+
+.lap-table .last-badge {
+  background: rgba(15, 118, 110, 0.2);
+  color: var(--teal);
+}
+
+.lap-table .replay-badge {
+  background: rgba(138, 43, 226, 0.2);
+  color: #8a2be2;
+}
+
+.lap-table .actions {
+  display: flex;
+  gap: 6px;
+}
+
+.lap-table .actions button {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+/* Small button variant */
+button.small {
+  padding: 4px 8px;
+  font-size: 12px;
+}

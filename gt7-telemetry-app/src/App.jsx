@@ -43,6 +43,15 @@ function App() {
   const [importFile, setImportFile] = useState(null)
   const [sessions, setSessions] = useState([])
   const [dbInfo, setDbInfo] = useState(null)
+  const [lastLapId, setLastLapId] = useState(null)
+  const [detailedLaps, setDetailedLaps] = useState([])
+  const [varianceData, setVarianceData] = useState(null)
+  const [showVariance, setShowVariance] = useState(false)
+  const [varianceLapCount, setVarianceLapCount] = useState(5)
+  const [fuelAnalysis, setFuelAnalysis] = useState(null)
+  const [medianLapId, setMedianLapId] = useState(null)
+  const [replayLaps, setReplayLaps] = useState([])
+  const [replayFilter, setReplayFilter] = useState('all') // 'all', 'replays', 'live'
 
   const lastPacketLabel = useMemo(() => {
     if (!status.lastPacketAt) return 'No packets yet'
@@ -241,6 +250,11 @@ function App() {
         sessionId: currentSessionId ? Number(currentSessionId) : null,
       })
       setLaps(data)
+      // Track last lap
+      const lastLap = data.find(l => l.isLastLap)
+      if (lastLap) {
+        setLastLapId(String(lastLap.id))
+      }
       if (!referenceLapId && data.length > 0) {
         setReferenceLapId(String(data[0].id))
       }
@@ -251,6 +265,84 @@ function App() {
       setError(err?.toString?.() ?? 'Failed to load laps')
     }
   }, [referenceLapId, compareLapId, currentSessionId])
+
+  const loadDetailedLaps = useCallback(async () => {
+    if (!currentSessionId) return
+    try {
+      const data = await invoke('list_laps_detailed', { sessionId: Number(currentSessionId) })
+      setDetailedLaps(data)
+      const lastLap = data.find(l => l.isLastLap)
+      if (lastLap) {
+        setLastLapId(String(lastLap.id))
+      }
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to load detailed laps')
+    }
+  }, [currentSessionId])
+
+  const loadFuelAnalysis = useCallback(async () => {
+    if (!currentSessionId) return
+    try {
+      const data = await invoke('get_session_fuel_analysis', { sessionId: Number(currentSessionId) })
+      setFuelAnalysis(data)
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to load fuel analysis')
+    }
+  }, [currentSessionId])
+
+  const loadVarianceData = useCallback(async () => {
+    if (!currentSessionId) return
+    try {
+      const bestLaps = await invoke('get_best_laps', {
+        sessionId: Number(currentSessionId),
+        count: varianceLapCount,
+      })
+      if (bestLaps.length >= 2) {
+        const lapIds = bestLaps.map(l => l.id)
+        const variance = await invoke('get_speed_variance', {
+          lapIds,
+          points: 200,
+        })
+        setVarianceData(variance)
+      }
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to load variance data')
+    }
+  }, [currentSessionId, varianceLapCount])
+
+  const loadMedianLap = useCallback(async () => {
+    if (!currentSessionId) return
+    try {
+      const medianLap = await invoke('get_median_lap', { sessionId: Number(currentSessionId) })
+      if (medianLap) {
+        setMedianLapId(String(medianLap.id))
+      }
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to load median lap')
+    }
+  }, [currentSessionId])
+
+  const loadReplayLaps = useCallback(async () => {
+    if (!currentSessionId) return
+    try {
+      const data = await invoke('list_replay_laps', { sessionId: Number(currentSessionId) })
+      setReplayLaps(data)
+    } catch (err) {
+      setError(err?.toString?.() ?? 'Failed to load replay laps')
+    }
+  }, [currentSessionId])
+
+  const useLastLap = useCallback(() => {
+    if (lastLapId) {
+      setCompareLapId(lastLapId)
+    }
+  }, [lastLapId])
+
+  const useMedianLap = useCallback(() => {
+    if (medianLapId) {
+      setCompareLapId(medianLapId)
+    }
+  }, [medianLapId])
 
   const loadSessions = useCallback(async () => {
     try {
@@ -456,12 +548,30 @@ function App() {
   useEffect(() => {
     const interval = setInterval(() => {
       loadLaps()
+      loadDetailedLaps()
       loadSessions()
       loadDatabaseInfo()
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [loadLaps, loadSessions, loadDatabaseInfo])
+  }, [loadLaps, loadDetailedLaps, loadSessions, loadDatabaseInfo])
+
+  useEffect(() => {
+    if (!currentSessionId) return
+    loadSessionPreferences()
+    loadMedianLap()
+    loadFuelAnalysis()
+  }, [currentSessionId, loadSessionPreferences, loadMedianLap, loadFuelAnalysis])
+
+  useEffect(() => {
+    if (!currentSessionId || !showVariance) return
+    loadVarianceData()
+  }, [currentSessionId, showVariance, varianceLapCount, loadVarianceData])
+
+  useEffect(() => {
+    if (!currentSessionId) return
+    loadReplayLaps()
+  }, [currentSessionId, loadReplayLaps])
 
   useEffect(() => {
     if (!currentSessionId) return
@@ -1281,10 +1391,18 @@ function App() {
                 <option value="">Select a lap</option>
                 {laps.map((lap) => (
                   <option key={lap.id} value={String(lap.id)}>
-                    Lap {lap.lapIndex} · {formatLapTime(lap.lapTimeMs)}
+                    Lap {lap.lapIndex} · {formatLapTime(lap.lapTimeMs)} {lap.isLastLap ? '(Last)' : ''}
                   </option>
                 ))}
               </select>
+              <div className="quick-selects">
+                <button type="button" className="ghost" onClick={useLastLap} disabled={!lastLapId}>
+                  Use Last Lap
+                </button>
+                <button type="button" className="ghost" onClick={useMedianLap} disabled={!medianLapId}>
+                  Use Median Lap
+                </button>
+              </div>
             </div>
           </div>
           <div className="chart-controls">
@@ -1365,6 +1483,36 @@ function App() {
                 onChange={(event) => setExportLimit(Number(event.target.value))}
               />
             </label>
+            <div className="control-group">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={showVariance}
+                  onChange={(event) => setShowVariance(event.target.checked)}
+                />
+                Show speed variance
+              </label>
+              <select
+                value={varianceLapCount}
+                onChange={(event) => setVarianceLapCount(Number(event.target.value))}
+                disabled={!showVariance}
+              >
+                <option value={3}>Top 3 laps</option>
+                <option value={5}>Top 5 laps</option>
+                <option value={10}>Top 10 laps</option>
+              </select>
+            </div>
+            <div className="control-group">
+              <label>Replay filter</label>
+              <select
+                value={replayFilter}
+                onChange={(event) => setReplayFilter(event.target.value)}
+              >
+                <option value="all">All Laps</option>
+                <option value="replays">Replays Only</option>
+                <option value="live">Live Only</option>
+              </select>
+            </div>
             <button type="button" onClick={exportSession} disabled={loading || !currentSessionId}>
               Export Session JSON
             </button>
@@ -1538,9 +1686,131 @@ function App() {
             Estimate fuel map impact and plan stints with lap time and distance
             projections.
           </p>
-          <div className="chart-card" aria-hidden="true">
-            <div className="placeholder">Fuel analysis will appear here.</div>
-          </div>
+          {fuelAnalysis ? (
+            <div className="fuel-panel">
+              <div className="fuel-summary">
+                <div>
+                  <span className="label">Current Fuel</span>
+                  <span className="value">{fuelAnalysis.currentFuel.toFixed(1)} L</span>
+                </div>
+                <div>
+                  <span className="label">Fuel Capacity</span>
+                  <span className="value">{fuelAnalysis.fuelCapacity.toFixed(1)} L</span>
+                </div>
+                <div>
+                  <span className="label">Avg Consumption</span>
+                  <span className="value">{fuelAnalysis.avgConsumptionPerLap.toFixed(2)} L/lap</span>
+                </div>
+                <div>
+                  <span className="label">Projected Laps</span>
+                  <span className="value">{fuelAnalysis.projectedLapsRemaining.toFixed(1)}</span>
+                </div>
+              </div>
+              <div className="fuel-table-wrapper">
+                <table className="fuel-table">
+                  <thead>
+                    <tr>
+                      <th>Lap</th>
+                      <th>Fuel Start</th>
+                      <th>Fuel End</th>
+                      <th>Consumed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fuelAnalysis.laps.map((lap) => (
+                      <tr key={lap.lapId}>
+                        <td>{lap.lapIndex}</td>
+                        <td>{lap.fuelStart.toFixed(2)} L</td>
+                        <td>{lap.fuelEnd.toFixed(2)} L</td>
+                        <td>{lap.consumed.toFixed(2)} L</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="chart-card" aria-hidden="true">
+              <div className="placeholder">Start a session to see fuel analysis.</div>
+            </div>
+          )}
+        </article>
+        <article>
+          <h2>Lap Details</h2>
+          <p>
+            Comprehensive lap metrics with sorting and quick selection.
+          </p>
+          {detailedLaps.length > 0 ? (
+            <div className="lap-table-wrapper">
+              <table className="lap-table">
+                <thead>
+                  <tr>
+                    <th>Lap</th>
+                    <th>Lap Time</th>
+                    <th>Delta</th>
+                    <th>Max Speed</th>
+                    <th>Avg Speed</th>
+                    <th>Throttle %</th>
+                    <th>Brake %</th>
+                    <th>Fuel</th>
+                    <th>Body Ht</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detailedLaps
+                    .filter((lap) => {
+                      if (replayFilter === 'replays') return lap.isReplay
+                      if (replayFilter === 'live') return !lap.isReplay
+                      return true
+                    })
+                    .map((lap) => (
+                      <tr key={lap.id} className={lap.isLastLap ? 'is-last' : ''}>
+                        <td>
+                          {lap.lapIndex}
+                          {lap.isLastLap && <span className="last-badge">Last</span>}
+                          {lap.isReplay && <span className="replay-badge">Replay</span>}
+                        </td>
+                        <td>{formatLapTime(lap.lapTimeMs)}</td>
+                        <td>{lap.deltaToBestMs ? `+${(lap.deltaToBestMs / 1000).toFixed(3)}s` : '—'}</td>
+                        <td>{lap.maxSpeedKmh.toFixed(0)}</td>
+                        <td>{lap.avgSpeedKmh.toFixed(0)}</td>
+                        <td>{lap.throttlePct.toFixed(0)}%</td>
+                        <td>{lap.brakePct.toFixed(0)}%</td>
+                        <td>{lap.fuelConsumed.toFixed(2)} L</td>
+                        <td>{lap.minBodyHeight.toFixed(3)}</td>
+                        <td className="actions">
+                          <button
+                            type="button"
+                            className="ghost small"
+                            onClick={() => {
+                              setReferenceLapId(String(lap.id))
+                              saveSessionPreferences(String(lap.id), compareLapId)
+                            }}
+                          >
+                            Ref
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost small"
+                            onClick={() => {
+                              setCompareLapId(String(lap.id))
+                              saveSessionPreferences(referenceLapId, String(lap.id))
+                            }}
+                          >
+                            Cmp
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="chart-card" aria-hidden="true">
+              <div className="placeholder">Start a session to see lap details.</div>
+            </div>
+          )}
         </article>
         <article>
           <h2>Database Management</h2>

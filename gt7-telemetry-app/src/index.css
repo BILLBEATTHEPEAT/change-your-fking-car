@@ -11,7 +11,10 @@
   --accent-strong: #0b5f58;
   --warning: #b45309;
   --danger: #b91c1c;
+  --teal: #0f766e;
   --shadow: 0 16px 40px rgba(47, 33, 16, 0.12);
+  --bg-input: #fff;
+  --bg-offset: #f5efe9;
 
   --sans: 'IBM Plex Sans', 'Segoe UI', sans-serif;
   --heading: 'Space Grotesk', 'IBM Plex Sans', sans-serif;
